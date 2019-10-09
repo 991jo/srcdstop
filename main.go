@@ -1,48 +1,72 @@
 package main
 
 import (
-	"net"
-	"fmt"
-	"os"
 	"encoding/binary"
-	"time"
-	"strconv"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
 	"sort"
+	"strings"
+	"strconv"
+	"time"
 )
 
 type A2SInfo struct {
-	header uint8
-	protocol uint8
-	name string
-	mapname string
-	folder string
-	game string
-	id int16
-	players uint8
+	header      uint8
+	protocol    uint8
+	name        string
+	mapname     string
+	folder      string
+	game        string
+	id          int16
+	players     uint8
 	max_players uint8
-	bots uint8
+	bots        uint8
 	server_type uint8
 	environment uint8
-	visibility uint8
-	vac uint8
-	// we asume here that nobody wants to do something with The Ship
-	version string
-	edf uint8 //Extra Data Flag
+	visibility  uint8
+	vac         uint8
+	// we assume here that nobody wants to do something with The Ship
+	version   string
+	edf       uint8     //Extra Data Flag
 	timestamp time.Time //Time when this was created
 }
 
 type Server struct {
 	addrport string
-	info A2SInfo
+	info     A2SInfo
 }
 
 type ByIP []Server
 
-func (a ByIP) Len() int { return len(a) }
-func (a ByIP) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a ByIP) Len() int           { return len(a) }
+func (a ByIP) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByIP) Less(i, j int) bool { return a[i].addrport < a[j].addrport }
 
-func send_info(conn net.UDPConn, addr string) {
+func min(a, b int) int {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+func getTtySize() (int, int, error) {
+	cmd := exec.Command("stty", "size")
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, err
+	}
+	size := string(out)
+	sizes := strings.Split(size, " ")
+	x, _ := strconv.Atoi(strings.TrimSpace(sizes[1]))
+	y, _ := strconv.Atoi(strings.TrimSpace(sizes[0]))
+	fmt.Println(sizes[1])
+	return x, y, nil
+}
+
+func sendInfo(conn net.UDPConn, addr string) {
 	info_msg := []byte("\xFF\xFF\xFF\xFFTSource Engine Query\x00")
 
 	dst, err := net.ResolveUDPAddr("udp", addr)
@@ -58,7 +82,7 @@ func send_info(conn net.UDPConn, addr string) {
 	}
 }
 
-func recv_answer(conn net.UDPConn) ([]byte, net.UDPAddr, net.Error) {
+func recvAnswer(conn net.UDPConn) ([]byte, net.UDPAddr, net.Error) {
 	buf := make([]byte, 1500)
 
 	amount, addr, err := conn.ReadFromUDP(buf)
@@ -75,25 +99,40 @@ func recv_answer(conn net.UDPConn) ([]byte, net.UDPAddr, net.Error) {
 	return buf[0:amount], *addr, nil
 }
 
+// parses the next byte starting at pos as an uint8
 func parse_byte(buf []byte, pos *int) uint8 {
 	value := uint8(buf[*pos])
 	*pos += 1
 	return value
 }
+
+// parses the next 2 bytes starting at pos as an int16 (LittleEndian)
 func parse_short(buf []byte, pos *int) int16 {
-	value := int16(binary.LittleEndian.Uint16(buf[*pos:*pos+2]))
+	value := int16(binary.LittleEndian.Uint16(buf[*pos : *pos+2]))
 	*pos += 2
 	return value
 }
+
+// parses from pos until a null byte appears (or until end of slice)
 func parse_string(buf []byte, pos *int) string {
-	// TODO
 	start := *pos
-	for buf[*pos] != 0 {
+	for buf[*pos] != 0 && *pos < len(buf){
 		*pos++
 	}
 	value := string(buf[start:*pos])
 	*pos++
 	return value
+}
+
+func padIPPort(ipport string) string {
+	for i := 0; i < len(ipport); i++ {
+		if string(ipport[i]) == string(":") {
+			lpad := strings.Repeat(" ", 15-i)
+			rpad := strings.Repeat(" ", 21 - len(lpad) - len(ipport))
+			return lpad + ipport + rpad
+		}
+	}
+	return ""
 }
 
 func parseResponse(buf []byte) A2SInfo {
@@ -103,7 +142,7 @@ func parseResponse(buf []byte) A2SInfo {
 	resp.protocol = parse_byte(buf, &pos)
 	resp.name = parse_string(buf, &pos)
 	resp.mapname = parse_string(buf, &pos)
-	resp.folder= parse_string(buf, &pos)
+	resp.folder = parse_string(buf, &pos)
 	resp.game = parse_string(buf, &pos)
 	resp.id = parse_short(buf, &pos)
 	resp.players = parse_byte(buf, &pos)
@@ -119,28 +158,10 @@ func parseResponse(buf []byte) A2SInfo {
 	return resp
 }
 
-
-
 func main() {
 	delay, _ := time.ParseDuration("500ms")
 
-	hosts := []string{
-		"4.5.6.7:27015",
-		"87.98.228.196:27040",
-		"216.52.148.47:27015",
-		"74.91.113.83:27015",
-		"13.73.0.133:27017",
-		"46.174.54.231:27015",
-		"54.37.111.216:27015",
-		"185.193.165.14:27015",
-		"89.40.104.120:27015",
-		"188.212.100.42:27015",
-		"193.33.176.95:27015",
-		"74.91.119.186:27015",
-		"193.33.176.106:27015",
-		"74.91.113.113:27015",
-		"145.239.149.122:27015",
-		"217.11.249.78:27242"}
+	hosts := os.Args[1:]
 
 	data := make(map[string]A2SInfo)
 
@@ -160,12 +181,12 @@ func main() {
 	for {
 
 		for server, _ := range data {
-			send_info(*conn, server)
+			sendInfo(*conn, server)
 		}
 
 		conn.SetReadDeadline(time.Now().Add(delay))
-		for i := 0; i< len(data); i++ {
-			buf, addr, err := recv_answer(*conn)
+		for i := 0; i < len(data); i++ {
+			buf, addr, err := recvAnswer(*conn)
 			if err != nil {
 				if err.Timeout() {
 					break
@@ -174,7 +195,6 @@ func main() {
 
 			addr4 := addr.IP.To4()
 			key := addr4.String() + ":" + strconv.Itoa(addr.Port)
-
 
 			info := parseResponse(buf)
 
@@ -188,15 +208,26 @@ func main() {
 
 		sort.Sort(ByIP(serverarray))
 
+		// reset cursor position to top left and clear the screen
 		fmt.Printf("\033[2J")
 		fmt.Printf("\033[0;0H")
 
 		for _, server := range serverarray {
 			addr := server.addrport
 			info := server.info
-			fmt.Printf("%s %2d(%2d)/%2d %s %f\n", addr, info.players, info.bots, info.max_players, info.mapname, time.Since(info.timestamp).Seconds())
+			// arbitrary date that should be after the default value of a time.Date
+			if info.timestamp.Before(time.Date(2000, time.January, 0,0,0,0,0, time.UTC)) {
+				fmt.Printf("\033[1m%s never seen\033[0m\n", padIPPort(addr))
+			} else if time.Now().Sub(info.timestamp).Seconds() > 2 {
+				fmt.Printf("\033[1m%s %2d(%2d)/%2d %s\033[0m\n",
+						padIPPort(addr), info.players, info.bots,
+						info.max_players, info.mapname[:min(len(info.mapname),15)])
+			} else {
+				fmt.Printf("%s %2d(%2d)/%2d %s\n",
+						padIPPort(addr), info.players, info.bots, info.max_players,
+						info.mapname[:min(len(info.mapname),15)])
+			}
 		}
 		fmt.Println("---------------------------------------------------")
 	}
 }
-
