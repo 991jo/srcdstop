@@ -19,4 +19,7 @@ After going through the pain of setting up go it should be a simple
 
 `Ctrl-C`
 
+# Important note
 
+This has only been tested with CSGO but should work with every source game
+(except The Ship).
